@@ -1,45 +1,97 @@
-# TODO: use @test to do tests
+using Test
 import SpecialFunctions
+import CuGammaFuns
 using Flux: Tracker
 using CuArrays: cu
-using CuGammaFuns
 
-xs_lgamma = [0.5f0]
-xs_digamma = [2.0f0, -2.2f0]
-xs_lbeta = ([2.0f0], [3.0f0])
+n = 1000
 
-println("1. Forward pass with CPU")
+xs_lgamma = randn(Float32, n); xs_lgamma_cu = cu(xs_lgamma)
+xs_digamma = randn(Float32, n); xs_digamma_cu = cu(xs_digamma)
+xs_trigamma = randn(Float32, n); xs_trigamma_cu = cu(xs_trigamma)
+xs_lbeta_tuple = (randn(Float32, n), randn(Float32, n))
+xs_lbeta_tuple = map(xs -> abs.(xs), xs_lbeta_tuple); xs_lbeta_cu_tuple = map(cu, xs_lbeta_tuple)
 
-println(SpecialFunctions.lgamma.(xs_lgamma))
-println(SpecialFunctions.digamma.(xs_digamma))
-println(SpecialFunctions.lbeta.(xs_lbeta...))
+catgrads(grads) = cat(map(ta -> ta.data, grads)...; dims=1)
+g∑fx(f, xs) = catgrads(Tracker.gradient(_xs -> sum(f.(_xs)), xs))
+g∑fx(f, xs, ys) = catgrads(Tracker.gradient((_xs, _ys) -> sum(f.(_xs, _ys)), xs, ys))
 
-println("2. Gradient with CPU")
+results = Dict()
+@testset "Forward evaluation" begin
+    fn = :lgamma
+    @testset "$fn" begin
+        lgamma_val_cpu = @time SpecialFunctions.lgamma.(xs_lgamma)
+        lgamma_val_gpu = @time CuGammaFuns.lgamma.(xs_lgamma_cu)
+        lgamma_val_gpu = Array(lgamma_val_gpu)
+        for i = 1:n
+            @test lgamma_val_cpu[i] ≈ lgamma_val_gpu[i]
+        end
+        results[fn] = (lgamma_val_cpu, lgamma_val_gpu)
+    end
+    
+    fn = :digamma
+    @testset "$fn" begin
+        digamma_val_cpu = @time SpecialFunctions.digamma.(xs_digamma)
+        digamma_val_gpu = @time CuGammaFuns.digamma.(xs_digamma_cu)
+        digamma_val_gpu = Array(digamma_val_gpu)
+        for i = 1:n
+            @test digamma_val_cpu[i] ≈ digamma_val_gpu[i]
+        end
+        results[fn] = (digamma_val_cpu, digamma_val_gpu)
+    end
+    
+    fn = :trigamma
+    @testset "$fn" begin
+        trigamma_val_cpu = @time SpecialFunctions.trigamma.(xs_trigamma)
+        trigamma_val_gpu = @time CuGammaFuns.trigamma.(xs_trigamma_cu)
+        trigamma_val_gpu = Array(trigamma_val_gpu)
+        for i = 1:n
+            @test trigamma_val_cpu[i] ≈ trigamma_val_gpu[i]
+        end
+        results[fn] = (trigamma_val_cpu, trigamma_val_gpu)
+    end
+    
+    fn = :lbeta
+    @testset "$fn" begin
+        lbeta_val_cpu = @time SpecialFunctions.lbeta.(xs_lbeta_tuple...)
+        lbeta_val_gpu = @time CuGammaFuns.lbeta.(xs_lbeta_cu_tuple...)
+        lbeta_val_gpu = Array(lbeta_val_gpu)
+        for i = 1:n
+            @test lbeta_val_cpu[i] ≈ lbeta_val_gpu[i]
+        end
+        results[fn] = (lbeta_val_cpu, lbeta_val_gpu)
+    end
+    
+end
 
-lgamma_reduce_sum(x) = sum(SpecialFunctions.lgamma.(x))
-digamma_reduce_sum(x) = sum(SpecialFunctions.digamma.(x))
-lbeta_reduce_sum(x, y) = sum(SpecialFunctions.lbeta.(x, y))
-
-println(Tracker.gradient(lgamma_reduce_sum, xs_lgamma))  
-println(Tracker.gradient(digamma_reduce_sum, xs_digamma))  
-println(Tracker.gradient(lbeta_reduce_sum, xs_lbeta...))  
-
-println("3. Forward pass with GPU")
-
-xs_lgamma_cu = cu(xs_lgamma)
-xs_digamma_cu = cu(xs_digamma)
-xs_lbeta_cu = map(x -> cu(x), xs_lbeta)
-
-println(lgamma.(xs_lgamma_cu))
-println(digamma.(xs_digamma_cu))
-println(lbeta.(xs_lbeta_cu...))
-
-println("4. Gradient with GPU")
-
-lgamma_reduce_sum_cu(x) = sum(lgamma.(x))
-digamma_reduce_sum_cu(x) = sum(digamma.(x))
-lbeta_reduce_sum_cu(x, y) = sum(lbeta.(x, y))
-
-println(Tracker.gradient(lgamma_reduce_sum_cu, xs_lgamma_cu))  
-println(Tracker.gradient(digamma_reduce_sum_cu, xs_digamma_cu))
-println(Tracker.gradient(lbeta_reduce_sum_cu, xs_lbeta_cu...))
+@testset "Gradient evaluation" begin
+    fn = :lgamma
+    @testset "$fn" begin
+        lgamma_grad_cpu = @time g∑fx(SpecialFunctions.lgamma, xs_lgamma)
+        lgamma_grad_gpu = @time g∑fx(CuGammaFuns.lgamma, xs_lgamma_cu)
+        lgamma_grad_gpu = Array(lgamma_grad_gpu)
+        for i = 1:n
+            @test lgamma_grad_cpu[i] ≈ lgamma_grad_gpu[i]
+        end
+    end
+    
+    fn = :digamma
+    @testset "$fn" begin
+        digamma_grad_cpu = @time g∑fx(SpecialFunctions.digamma, xs_digamma)
+        digamma_grad_gpu = @time g∑fx(CuGammaFuns.digamma, xs_digamma_cu)
+        digamma_grad_gpu = Array(digamma_grad_gpu)
+        for i = 1:n
+            @test digamma_grad_cpu[i] ≈ digamma_grad_gpu[i]
+        end
+    end
+    
+    fn = :lbeta
+    @testset "$fn" begin
+        lbeta_grad_cpu = @time g∑fx(SpecialFunctions.lbeta, xs_lbeta_tuple...)
+        lbeta_grad_gpu = @time g∑fx(CuGammaFuns.lbeta, xs_lbeta_cu_tuple...)
+        lbeta_grad_gpu = Array(lbeta_grad_gpu)
+        for i = 1:n
+            @test lbeta_grad_cpu[i] ≈ lbeta_grad_gpu[i]
+        end
+    end
+end
